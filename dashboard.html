@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 売買ペーパートレード</title>
+<style>
+:root {
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --series: #2a78d6; --up: #006300; --down: #d03b3b; --warn: #fab219;
+  --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --series: #3987e5; --up: #0ca30c; --down: #e66767;
+    --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.6 system-ui, "Segoe UI", "Yu Gothic UI", sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 32px 0 8px; }
+.sub { color: var(--ink-2); margin: 0 0 20px; }
+.banner { border-left: 4px solid var(--warn); background: var(--surface); padding: 10px 14px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--grid); border-radius: 8px; padding: 12px 14px; }
+.tile .k { color: var(--ink-2); font-size: 12px; }
+.tile .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.up { color: var(--up); } .down { color: var(--down); }
+.card { background: var(--surface); border: 1px solid var(--grid); border-radius: 8px; padding: 12px; position: relative; }
+svg { display: block; width: 100%; height: 260px; }
+.tip { position: absolute; pointer-events: none; background: var(--page); border: 1px solid var(--axis); border-radius: 6px; padding: 6px 10px; font-size: 12px; white-space: nowrap; display: none; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--ink-2); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; }
+tr.clickable { cursor: pointer; }
+tr.detail td { white-space: pre-wrap; color: var(--ink-2); font-size: 12px; }
+.muted { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+.legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
+.tip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+details summary { cursor: pointer; color: var(--ink-2); margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AI 売買ペーパートレード</h1>
+  <p class="sub" id="sub">読み込み中…</p>
+  <div id="banner"></div>
+  <div class="tiles" id="tiles"></div>
+
+  <h2>資産の推移 <span class="muted">（同じ日に元本を指数へ入れていた場合と比較・海外指数は円換算）</span></h2>
+  <div class="card">
+    <div class="legend" id="legend"></div>
+    <svg id="chart" role="img" aria-label="資産の推移"></svg>
+    <div class="tip" id="tip"></div>
+    <div class="scroll"><table id="benchTable"></table></div>
+    <details><summary>表で見る</summary><div class="scroll"><table id="snapTable"></table></div></details>
+  </div>
+
+  <h2>保有銘柄</h2>
+  <div class="card scroll"><table id="posTable"></table></div>
+
+  <h2>判断ログ <span class="muted">（行をクリックすると AI に渡した情報を表示）</span></h2>
+  <label class="muted"><input type="checkbox" id="hideHold" checked> 様子見を隠す</label>
+  <div class="card scroll"><table id="decTable"></table></div>
+
+  <h2>注文</h2>
+  <div class="card scroll"><table id="ordTable"></table></div>
+</main>
+<script>
+const yen = v => v == null ? "—" : Math.round(v).toLocaleString("ja-JP") + "円";
+const signed = v => (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP") + "円";
+const pct = v => (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%";
+const cls = v => v > 0 ? "up" : v < 0 ? "down" : "";
+const ACTION = { buy: "買い", sell: "売り", hold: "様子見" };
+const STATUS = { pending: "未約定", filled: "約定", rejected: "取消", expired: "期限切れ" };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function table(el, cols, rows, empty) {
+  if (!rows.length) { el.innerHTML = `<tr><td class="muted">${empty}</td></tr>`; return; }
+  el.innerHTML = "<tr>" + cols.map(c => `<th class="${c.num ? "num" : ""}">${c.h}</th>`).join("") + "</tr>" +
+    rows.map(r => "<tr>" + cols.map(c => `<td class="${c.num ? "num " : ""}${c.cls ? c.cls(r) : ""}">${c.f(r)}</td>`).join("") + "</tr>").join("");
+}
+
+const COLORS = ["var(--series)", "var(--s2)", "var(--s3)", "var(--s4)"];
+
+function drawChart(snaps, initial, series) {
+  const svg = document.getElementById("chart"), tip = document.getElementById("tip");
+  if (snaps.length < 2) { svg.innerHTML = `<text x="16" y="30" fill="var(--muted)">2日分以上の記録がたまるとグラフが表示されます</text>`; return; }
+  const W = svg.clientWidth, H = 260, L = 84, R = 118, T = 12, B = 28;
+  const ys = series.flatMap(s => s.values.filter(v => v != null)).concat([initial]);
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  const pad = (hi - lo) * 0.1 || initial * 0.01; lo -= pad; hi += pad;
+  const x = i => L + (W - L - R) * i / (snaps.length - 1);
+  const y = v => T + (H - T - B) * (hi - v) / (hi - lo);
+  let g = "";
+  const raw = (hi - lo) / 4, mag = 10 ** Math.floor(Math.log10(raw));
+  const tick = [1, 2, 5, 10].map(m => m * mag).find(t => t >= raw);
+  for (let v = Math.ceil(lo / tick) * tick; v <= hi; v += tick) {
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/>` +
+         `<text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${Math.round(v).toLocaleString("ja-JP")}</text>`;
+  }
+  g += `<line x1="${L}" x2="${W - R}" y1="${y(initial)}" y2="${y(initial)}" stroke="var(--axis)" stroke-dasharray="4 4"/>` +
+       `<text x="${L + 4}" y="${y(initial) - 6}" font-size="11" fill="var(--ink-2)">元本</text>`;
+  const step = Math.max(1, Math.ceil(snaps.length / 6));
+  const long = snaps[0].date.slice(0, 4) !== snaps[snaps.length - 1].date.slice(0, 4);
+  snaps.forEach((s, i) => { if (i % step === 0) g += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--muted)">${long ? s.date.slice(0, 7) : s.date.slice(5)}</text>`; });
+  // 比較線を先に、AI を最後（最前面）に描く
+  const order = series.map((_, k) => k).reverse();
+  for (const k of order) {
+    const s = series[k];
+    const pts = s.values.map((v, i) => v == null ? null : `${x(i)},${y(v)}`).filter(Boolean).join(" ");
+    g += `<polyline fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" points="${pts}"/>`;
+  }
+  // 線の右端に名前（重ならないよう縦にずらす）
+  const ends = series.map(s => ({ s, y: y(s.values[s.values.length - 1] ?? initial) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 14);
+  ends.forEach(e => g += `<text x="${W - R + 8}" y="${e.y + 4}" font-size="11" fill="var(--ink-2)">${e.s.short}</text>`);
+  g += `<line id="cross" y1="${T}" y2="${H - B}" stroke="var(--axis)" visibility="hidden"/>` +
+       series.map((s, k) => `<circle class="dot" r="4" fill="${s.color}" stroke="var(--surface)" stroke-width="2" visibility="hidden"/>`).join("") +
+       `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="hit"/>`;
+  svg.innerHTML = g;
+  const cross = svg.querySelector("#cross"), dots = [...svg.querySelectorAll(".dot")];
+  svg.querySelector("#hit").addEventListener("mousemove", e => {
+    const rect = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(snaps.length - 1, Math.round((e.clientX - rect.left - L) / (W - L - R) * (snaps.length - 1))));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    series.forEach((s, k) => {
+      const v = s.values[i];
+      dots[k].setAttribute("visibility", v == null ? "hidden" : "visible");
+      if (v != null) { dots[k].setAttribute("cx", x(i)); dots[k].setAttribute("cy", y(v)); }
+    });
+    tip.innerHTML = snaps[i].date + series.map(s => s.values[i] == null ? "" :
+      `<br><i style="background:${s.color}"></i>${esc(s.name)} <b>${yen(s.values[i])}</b> <span class="${cls(s.values[i] - initial)}">${pct(s.values[i] / initial - 1)}</span>`).join("");
+    tip.style.display = "block";
+    const left = x(i) + 24;
+    tip.style.left = (left + tip.offsetWidth > W ? x(i) - tip.offsetWidth : left) + "px";
+    tip.style.top = T + "px";
+  });
+  svg.querySelector("#hit").addEventListener("mouseleave", () => {
+    tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden"));
+  });
+}
+
+function renderDecisions(d, name) {
+  const rows = document.getElementById("hideHold").checked ? d.decisions.filter(r => r.action !== "hold") : d.decisions;
+  const decTable = document.getElementById("decTable");
+  table(decTable, [
+    { h: "日付", f: r => r.date }, { h: "銘柄", f: r => name(r.symbol) },
+    { h: "終値", num: 1, f: r => r.close?.toFixed(1) ?? "—" },
+    { h: "判断", f: r => ACTION[r.action] ?? esc(r.action) },
+    { h: "確信度", num: 1, f: r => r.confidence.toFixed(2) },
+    { h: "結果", f: r => esc(r.outcome) },
+  ], rows, "判断の記録はまだありません");
+  [...decTable.rows].slice(1).forEach((tr, i) => {
+    tr.classList.add("clickable");
+    tr.onclick = () => {
+      if (tr.nextElementSibling?.classList.contains("detail")) { tr.nextElementSibling.remove(); return; }
+      tr.insertAdjacentHTML("afterend", `<tr class="detail"><td colspan="6">${esc(rows[i].state)}</td></tr>`);
+    };
+  });
+}
+
+async function load() {
+  const d = await (await fetch("/api/summary")).json();
+  if (d.error) { document.getElementById("sub").textContent = "読み込みエラー: " + d.error; return; }
+  const cfg = d.config, initial = cfg.initial_cash, snaps = d.snapshots;
+  const last = snaps[snaps.length - 1];
+  const engine = d.decisions[0]?.engine;
+  document.getElementById("sub").textContent =
+    `モード: ${cfg.mode === "paper" ? "ペーパー（仮想売買）" : cfg.mode} ・ 判断エンジン: ${engine === "ai" ? "AI" : engine === "dummy" ? "ダミー（SMAクロス）" : "—"} ・ 最終更新: ${last?.date ?? "まだ記録がありません"}`;
+  document.getElementById("banner").innerHTML = d.stopped ? `<div class="banner">STOP ファイルがあるため、新規注文を停止しています。</div>` : "";
+
+  const equity = last ? last.equity : initial;
+  const tiles = [
+    ["資産合計", yen(equity), ""],
+    ["損益", signed(equity - initial), cls(equity - initial)],
+    ["損益率", ((equity / initial - 1) * 100).toFixed(2) + "%", cls(equity - initial)],
+    ["現金", yen(last ? last.cash : initial), ""],
+    ["株の評価額", yen(last ? last.positions_value : 0), ""],
+    ["払った税金（源泉徴収）", yen(d.tax_paid ?? 0), ""],
+  ];
+  document.getElementById("tiles").innerHTML = tiles.map(([k, v, c]) => `<div class="tile"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join("");
+
+  const series = [{ name: engine === "ai" ? "AI" : "このツール", short: engine === "ai" ? "AI" : "このツール", values: snaps.map(s => s.equity) }]
+    .concat((d.benchmarks ?? []).map(b => ({ name: b.name + (b.yen ? "（円換算）" : ""), short: b.name.replace(/（.*）/, ""), values: b.equity })))
+    .slice(0, COLORS.length).map((s, k) => ({ ...s, color: COLORS[k] }));
+  document.getElementById("legend").innerHTML = series.length > 1
+    ? series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("") : "";
+  drawChart(snaps, initial, series);
+  window.onresize = () => drawChart(snaps, initial, series);
+  const lastOf = s => [...s.values].reverse().find(v => v != null);
+  table(document.getElementById("benchTable"), [
+    { h: "比較対象", f: s => esc(s.name) },
+    { h: "期間末の資産", num: 1, f: s => yen(lastOf(s)) },
+    { h: "リターン", num: 1, f: s => pct(lastOf(s) / initial - 1), cls: s => cls(lastOf(s) - initial) },
+    { h: `${esc(series[0].name)} との差`, num: 1, f: s => signed(series[0].values.at(-1) - lastOf(s)), cls: s => cls(series[0].values.at(-1) - lastOf(s)) },
+  ], snaps.length > 1 ? series : [], "記録なし");
+  table(document.getElementById("snapTable"), [
+    { h: "日付", f: r => r.date }, { h: "資産", num: 1, f: r => yen(r.equity) },
+    { h: "損益", num: 1, f: r => signed(r.equity - initial), cls: r => cls(r.equity - initial) },
+    { h: "現金", num: 1, f: r => yen(r.cash) }, { h: "株", num: 1, f: r => yen(r.positions_value) },
+  ], snaps.slice().reverse(), "記録なし");
+
+  table(document.getElementById("posTable"), [
+    { h: "銘柄", f: r => `${esc(r.name)} <span class="muted">${esc(r.symbol)}</span>` },
+    { h: "株数", num: 1, f: r => r.qty.toLocaleString() },
+    { h: "平均取得単価", num: 1, f: r => r.avg_cost.toFixed(1) },
+    { h: "終値", num: 1, f: r => r.close?.toFixed(1) ?? "—" },
+    { h: "評価損益", num: 1, f: r => r.close ? signed((r.close - r.avg_cost) * r.qty) : "—", cls: r => cls((r.close - r.avg_cost) * r.qty) },
+  ], d.positions, "保有なし");
+
+  const name = s => esc(cfg.watchlist[s] ?? s);
+  const hideHold = document.getElementById("hideHold");
+  hideHold.onchange = () => renderDecisions(d, name);
+  renderDecisions(d, name);
+
+  table(document.getElementById("ordTable"), [
+    { h: "判断日", f: r => r.decided_on }, { h: "銘柄", f: r => name(r.symbol) },
+    { h: "売買", f: r => ACTION[r.side] }, { h: "株数", num: 1, f: r => r.qty.toLocaleString() },
+    { h: "状態", f: r => STATUS[r.status] ?? r.status }, { h: "約定日", f: r => r.fill_date ?? "—" },
+    { h: "指値", num: 1, f: r => r.limit_price?.toFixed(1) ?? "成行" }, { h: "約定単価", num: 1, f: r => r.fill_price?.toFixed(2) ?? "—" }, { h: "メモ", f: r => esc(r.note ?? "") },
+  ], d.orders, "注文はまだありません");
+}
+load();
+</script>
+</body>
+</html>

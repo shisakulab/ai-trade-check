@@ -1,0 +1,83 @@
+{
+  "mode": "paper",
+  "initial_cash": 1000000,
+  "watchlist": {
+    "8306.T": "三菱UFJ",
+    "7011.T": "三菱重工業",
+    "9984.T": "ソフトバンクG",
+    "9501.T": "東京電力HD",
+    "9107.T": "川崎汽船",
+    "9432.T": "NTT",
+    "7267.T": "ホンダ",
+    "4755.T": "楽天グループ",
+    "7012.T": "川崎重工業",
+    "5401.T": "日本製鉄",
+    "7201.T": "日産自動車",
+    "6503.T": "三菱電機",
+    "3382.T": "セブン&アイ",
+    "1605.T": "INPEX",
+    "9434.T": "ソフトバンク",
+    "8604.T": "野村HD",
+    "6701.T": "NEC",
+    "6752.T": "パナソニック HD",
+    "7269.T": "スズキ",
+    "8053.T": "住友商事",
+    "6178.T": "日本郵政",
+    "5020.T": "ENEOS HD",
+    "7182.T": "ゆうちょ銀行",
+    "2502.T": "アサヒGHD",
+    "7261.T": "マツダ",
+    "5411.T": "JFE HD",
+    "8309.T": "三井住友トラスト",
+    "9503.T": "関西電力",
+    "8267.T": "イオン",
+    "9201.T": "JAL"
+  },
+  "screen": {
+    "top_n": 5
+  },
+  "market_index": "^N225",
+  "core": {
+    "symbol": "2513.T",
+    "name": "NEXT外国株式",
+    "cash_buffer_ratio": 0.02,
+    "min_trade_ratio": 0.05
+  },
+  "benchmarks": [
+    {
+      "symbol": "^IXIC",
+      "name": "NASDAQ総合",
+      "fx": "JPY=X"
+    },
+    {
+      "symbol": "ACWI",
+      "name": "全世界株（ACWI）",
+      "fx": "JPY=X"
+    },
+    {
+      "symbol": "^N225",
+      "name": "日経平均"
+    }
+  ],
+  "engine": "dummy",
+  "strategy": "ai",
+  "entry": {
+    "buy": "dip",
+    "dip_pct": 0.01,
+    "valid_days": 3
+  },
+  "risk": {
+    "min_confidence": 0.6,
+    "max_position_yen": 300000,
+    "max_exposure_ratio": 0.7,
+    "stop_loss_pct": 0.08,
+    "max_orders_per_day": 3,
+    "daily_loss_limit_yen": 30000,
+    "total_loss_limit_yen": 100000
+  },
+  "costs": {
+    "commission_rate": 0.0,
+    "slippage_rate": 0.001,
+    "tax_rate": 0.20315
+  }
+}
